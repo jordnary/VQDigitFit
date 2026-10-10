@@ -1,0 +1,21 @@
+# Private reports and all reproducible runtime artifacts.
+/reports/
+/data/*
+!/data/README.md
+/outputs/*
+!/outputs/README.md
+__pycache__/
+.pytest_cache/
+*.py[cod]
+*.log
+.env
+.env.*
+*.pem
+*.key
+*.pfx
+*.p12
+*.db
+*.sqlite*
+.venv/
+.idea/
+.vscode/
