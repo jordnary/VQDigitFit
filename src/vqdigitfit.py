@@ -169,7 +169,14 @@ def evaluate(model, config, args, device):
     metrics = {"config": config, "parameter_count": sum(p.numel() for p in model.parameters()),
                "noise_sigma": 5 / 255, "noise_clipped": False,
                "noise_seed": config["seed"] + 1, "random_seed": config["seed"] + 2,
-               "random_trials": args.trials, "random_mode": "iid_uniform_trained_codewords"}
+               "random_trials": args.trials, "random_mode": "iid_uniform_trained_codewords",
+               "random_codebook_seed": config["seed"] + 3}
+    untrained = VQVAE().to(device)
+    untrained.load_state_dict(model.state_dict())
+    fresh_codes = torch.empty(64, 32).uniform_(-1 / 64, 1 / 64,
+                  generator=torch.Generator().manual_seed(config["seed"] + 3))
+    untrained.codebook.weight.copy_(fresh_codes.to(device))
+    untrained.eval()
     arrays = {}
     for split, is_train in [("train", True), ("test", False)]:
         images, labels = load_data(args.data, is_train)
@@ -190,6 +197,7 @@ def evaluate(model, config, args, device):
         second, _, _, second_idx = model(five.to(device), "second")
         generator = torch.Generator().manual_seed(config["seed"] + 2)
         random_rec, _, _, random_idx = model(five.to(device), "random", generator)
+        fresh_rec, _, _, fresh_idx = untrained(five.to(device))
         clean_five = recon[5:6].cpu()
         metrics[split]["five"] = {
             "clean": summarize_metrics(image_metrics(clean_five, five)),
@@ -197,6 +205,7 @@ def evaluate(model, config, args, device):
             "noisy_reconstruction": summarize_metrics(image_metrics(noisy_rec.cpu(), five)),
             "second": summarize_metrics(image_metrics(second.cpu(), five)),
             "random": summarize_metrics(image_metrics(random_rec.cpu(), five)),
+            "random_codebook": summarize_metrics(image_metrics(fresh_rec.cpu(), five)),
             "noise_sample_std": noise.std(unbiased=False).item() * 5 / 255,
             "noise_index_change_fraction": (noisy_idx.cpu() != indices[5:6].cpu()).float().mean().item(),
             "second_index_change_fraction": (second_idx.cpu() != indices[5:6].cpu()).float().mean().item()}
@@ -208,9 +217,10 @@ def evaluate(model, config, args, device):
             "mae_min": float(trial_mae.min()), "mae_max": float(trial_mae.max())}
         metrics[split]["five"]["black_baseline_mae"] = float(five.abs().mean())
         grid(figs / f"{split}_noise.png", [torch.cat([five, noisy, clean_five, noisy_rec.cpu()])],
-             ["Digit 5"], ["Clean", "Gaussian noise", "Clean reconstruction", "Noisy reconstruction"])
-        grid(figs / f"{split}_quantization.png", [torch.cat([five, clean_five, second.cpu(), random_rec.cpu()])],
-             ["Digit 5"], ["Input", "Nearest", "Second nearest", "Random codewords"])
+             ["Digit 5"], ["Clean", "Gaussian noise", "Clean\nreconstruction", "Noisy\nreconstruction"])
+        grid(figs / f"{split}_quantization.png",
+             [torch.cat([five, clean_five, second.cpu(), random_rec.cpu(), fresh_rec.cpu()])],
+             ["Digit 5"], ["Input", "Nearest", "Second nearest", "Random indices", "Random codebook"])
         maps = torch.cat([indices[5:6].cpu(), noisy_idx.cpu(), second_idx.cpu(), random_idx.cpu()])
         fig, axes = plt.subplots(1, 4, figsize=(9, 2.7), layout="constrained")
         for ax, ids, title in zip(axes, maps, ["Nearest", "Noisy nearest", "Second nearest", "Random"]):
@@ -222,7 +232,8 @@ def evaluate(model, config, args, device):
         fig.savefig(figs / f"{split}_indices.png", dpi=200)
         plt.close(fig)
         for name, value in dict(noisy=noisy, noise_reconstruction=noisy_rec.cpu(),
-                                second=second.cpu(), random=random_rec.cpu(), maps=maps).items():
+                                second=second.cpu(), random=random_rec.cpu(), maps=maps,
+                                random_codebook=fresh_rec.cpu(), random_codebook_indices=fresh_idx.cpu()).items():
             arrays[f"{split}_{name}"] = value.numpy()
         if not is_train:
             full = {key: [] for key in ["mae", "mse", "psnr_db"]}
